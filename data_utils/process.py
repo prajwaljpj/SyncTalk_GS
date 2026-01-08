@@ -1,6 +1,5 @@
 import os
 import glob
-import tqdm
 import json
 import argparse
 import cv2
@@ -9,72 +8,94 @@ import torch
 import torch.nn.functional as F
 import face_alignment
 from face_tracking.util import euler2rot
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn, TimeElapsedColumn, MofNCompleteColumn
+from rich.console import Console
+
+console = Console()
 
 
 def extract_audio(path, out_path, sample_rate=16000):
-    
-    print(f'[INFO] ===== extract audio from {path} to {out_path} =====')
+
+    console.print(f'[bold blue][INFO][/bold blue] Extracting audio from [cyan]{path}[/cyan] to [cyan]{out_path}[/cyan]')
     cmd = f'ffmpeg -i {path} -f wav -ar {sample_rate} {out_path}'
     os.system(cmd)
-    print(f'[INFO] ===== extracted audio =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted audio successfully')
 
 def extract_audio_features(path, mode='ave'):
 
-    print(f'[INFO] ===== extract audio labels for {path} =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting audio features for [cyan]{path}[/cyan] using [yellow]{mode}[/yellow]')
     if mode == 'ave':
-        print(f'AVE has been integrated into the training code, no need to extract audio features')
+        console.print(f'[bold yellow][INFO][/bold yellow] AVE has been integrated into training code, skipping feature extraction')
     elif mode == "deepspeech": # deepspeech
         cmd = f'python data_utils/deepspeech_features/extract_ds_features.py --input {path}'
         os.system(cmd)
     elif mode == 'hubert':
         cmd = f'python data_utils/hubert.py --wav {path}' # save to data/<name>_hu.npy
         os.system(cmd)
-    print(f'[INFO] ===== extracted audio labels =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted audio features successfully')
 
 
 def extract_images(path, out_path, fps=25):
 
-    print(f'[INFO] ===== extract images from {path} to {out_path} =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting images from [cyan]{path}[/cyan] at [yellow]{fps}fps[/yellow]')
     cmd = f'ffmpeg -i {path} -vf fps={fps} -qmin 1 -q:v 1 -start_number 0 {os.path.join(out_path, "%d.jpg")}'
     os.system(cmd)
-    print(f'[INFO] ===== extracted images =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted images successfully')
 
 
-def extract_semantics(ori_imgs_dir, parsing_dir):
+def extract_semantics(ori_imgs_dir, parsing_dir, use_segformer=False):
 
-    print(f'[INFO] ===== extract semantics from {ori_imgs_dir} to {parsing_dir} =====')
-    cmd = f'python data_utils/face_parsing/test.py --respath={parsing_dir} --imgpath={ori_imgs_dir}'
+    model_name = 'Segformer' if use_segformer else 'BiSeNet'
+    console.print(f'[bold blue][INFO][/bold blue] Extracting semantics using [yellow]{model_name}[/yellow] model')
+    if use_segformer:
+        cmd = f'python data_utils/face_parsing/segformer.py --respath={parsing_dir} --imgpath={ori_imgs_dir}'
+    else:
+        cmd = f'python data_utils/face_parsing/test.py --respath={parsing_dir} --imgpath={ori_imgs_dir}'
     os.system(cmd)
-    print(f'[INFO] ===== extracted semantics =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted semantics successfully')
 
 
 def extract_landmarks(ori_imgs_dir):
 
-    print(f'[INFO] ===== extract face landmarks from {ori_imgs_dir} =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting face landmarks from [cyan]{ori_imgs_dir}[/cyan]')
     try:
         fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, flip_input=False)
     except:
         fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, flip_input=False)
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
-    for image_path in tqdm.tqdm(image_paths):
-        input = cv2.imread(image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
-        input = cv2.cvtColor(input, cv2.COLOR_BGR2RGB)
-        preds = fa.get_landmarks(input)
-        if len(preds) > 0:
-            lands = preds[0].reshape(-1, 2)[:,:2]
-            np.savetxt(image_path.replace('jpg', 'lms'), lands, '%f')
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("[cyan]Extracting landmarks", total=len(image_paths))
+        for image_path in image_paths:
+            input = cv2.imread(image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
+            input = cv2.cvtColor(input, cv2.COLOR_BGR2RGB)
+            preds = fa.get_landmarks(input)
+            if len(preds) > 0:
+                lands = preds[0].reshape(-1, 2)[:,:2]
+                np.savetxt(image_path.replace('jpg', 'lms'), lands, '%f')
+            progress.advance(task)
+
     del fa
-    print(f'[INFO] ===== extracted face landmarks =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted face landmarks successfully')
 
 
 def extract_background(base_dir, ori_imgs_dir):
-    
-    print(f'[INFO] ===== extract background image from {ori_imgs_dir} =====')
+
+    console.print(f'[bold blue][INFO][/bold blue] Extracting background image from [cyan]{ori_imgs_dir}[/cyan]')
 
     from sklearn.neighbors import NearestNeighbors
 
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
-    # only use 1/20 image_paths 
+    # only use 1/20 image_paths
     image_paths = image_paths[::20]
     # read one image to get H/W
     tmp_image = cv2.imread(image_paths[0], cv2.IMREAD_UNCHANGED) # [H, W, 3]
@@ -83,13 +104,26 @@ def extract_background(base_dir, ori_imgs_dir):
     # nearest neighbors
     all_xys = np.mgrid[0:h, 0:w].reshape(2, -1).transpose()
     distss = []
-    for image_path in tqdm.tqdm(image_paths):
-        parse_img = cv2.imread(image_path.replace('ori_imgs', 'parsing').replace('.jpg', '.png'))
-        bg = (parse_img[..., 0] == 255) & (parse_img[..., 1] == 255) & (parse_img[..., 2] == 255)
-        fg_xys = np.stack(np.nonzero(~bg)).transpose(1, 0)
-        nbrs = NearestNeighbors(n_neighbors=1, algorithm='kd_tree').fit(fg_xys)
-        dists, _ = nbrs.kneighbors(all_xys)
-        distss.append(dists)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("[cyan]Computing background distances", total=len(image_paths))
+        for image_path in image_paths:
+            parse_img = cv2.imread(image_path.replace('ori_imgs', 'parsing').replace('.jpg', '.png'))
+            bg = (parse_img[..., 0] == 255) & (parse_img[..., 1] == 255) & (parse_img[..., 2] == 255)
+            fg_xys = np.stack(np.nonzero(~bg)).transpose(1, 0)
+            nbrs = NearestNeighbors(n_neighbors=1, algorithm='kd_tree').fit(fg_xys)
+            dists, _ = nbrs.kneighbors(all_xys)
+            distss.append(dists)
+            progress.advance(task)
 
     distss = np.stack(distss)
     max_dist = np.max(distss, 0)
@@ -121,134 +155,147 @@ def extract_background(base_dir, ori_imgs_dir):
 
     cv2.imwrite(os.path.join(base_dir, 'bc.jpg'), bc_img)
 
-    print(f'[INFO] ===== extracted background image =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted background image successfully')
 
 
 def extract_torso_and_gt(base_dir, ori_imgs_dir):
 
-    print(f'[INFO] ===== extract torso and gt images for {base_dir} =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting torso and GT images for [cyan]{base_dir}[/cyan]')
 
     from scipy.ndimage import binary_erosion, binary_dilation
 
     # load bg
     bg_image = cv2.imread(os.path.join(base_dir, 'bc.jpg'), cv2.IMREAD_UNCHANGED)
-    
+
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
 
-    for image_path in tqdm.tqdm(image_paths):
-        # read ori image
-        ori_image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+    ) as progress:
+        task = progress.add_task("[cyan]Extracting torso and GT images", total=len(image_paths))
+        for image_path in image_paths:
+            # read ori image
+            ori_image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED) # [H, W, 3]
 
-        # read semantics
-        seg = cv2.imread(image_path.replace('ori_imgs', 'parsing').replace('.jpg', '.png'))
-        mask_img = np.zeros_like(seg)
-        head_part = (seg[..., 0] == 255) & (seg[..., 1] == 0) & (seg[..., 2] == 0)
-        neck_part = (seg[..., 0] == 0) & (seg[..., 1] == 255) & (seg[..., 2] == 0)
-        torso_part = (seg[..., 0] == 0) & (seg[..., 1] == 0) & (seg[..., 2] == 255)
-        bg_part = (seg[..., 0] == 255) & (seg[..., 1] == 255) & (seg[..., 2] == 255)
-        mask_img[head_part, :] = 255
-        cv2.imwrite(image_path.replace('ori_imgs', 'face_mask').replace('.jpg', '.png'), mask_img)
-        # get gt image
-        gt_image = ori_image.copy()
-        gt_image[bg_part] = bg_image[bg_part]
-        cv2.imwrite(image_path.replace('ori_imgs', 'gt_imgs'), gt_image)
+            # read semantics
+            seg = cv2.imread(image_path.replace('ori_imgs', 'parsing').replace('.jpg', '.png'))
+            mask_img = np.zeros_like(seg)
+            head_part = (seg[..., 0] == 255) & (seg[..., 1] == 0) & (seg[..., 2] == 0)
+            neck_part = (seg[..., 0] == 0) & (seg[..., 1] == 255) & (seg[..., 2] == 0)
+            torso_part = (seg[..., 0] == 0) & (seg[..., 1] == 0) & (seg[..., 2] == 255)
+            bg_part = (seg[..., 0] == 255) & (seg[..., 1] == 255) & (seg[..., 2] == 255)
+            mask_img[head_part, :] = 255
+            cv2.imwrite(image_path.replace('ori_imgs', 'face_mask').replace('.jpg', '.png'), mask_img)
+            # get gt image
+            gt_image = ori_image.copy()
+            gt_image[bg_part] = bg_image[bg_part]
+            cv2.imwrite(image_path.replace('ori_imgs', 'gt_imgs'), gt_image)
 
-        # get torso image
-        torso_image = gt_image.copy() # rgb
-        torso_image[head_part] = bg_image[head_part]
-        torso_alpha = 255 * np.ones((gt_image.shape[0], gt_image.shape[1], 1), dtype=np.uint8) # alpha
-        
-        # torso part "vertical" in-painting...
-        L = 8 + 1
-        torso_coords = np.stack(np.nonzero(torso_part), axis=-1) # [M, 2]
-        # lexsort: sort 2D coords first by y then by x, 
-        # ref: https://stackoverflow.com/questions/2706605/sorting-a-2d-numpy-array-by-multiple-axes
-        inds = np.lexsort((torso_coords[:, 0], torso_coords[:, 1]))
-        torso_coords = torso_coords[inds]
-        # choose the top pixel for each column
-        u, uid, ucnt = np.unique(torso_coords[:, 1], return_index=True, return_counts=True)
-        top_torso_coords = torso_coords[uid] # [m, 2]
-        # only keep top-is-head pixels
-        top_torso_coords_up = top_torso_coords.copy() - np.array([1, 0])
-        mask = head_part[tuple(top_torso_coords_up.T)] 
-        if mask.any():
-            top_torso_coords = top_torso_coords[mask]
+            # get torso image
+            torso_image = gt_image.copy() # rgb
+            torso_image[head_part] = bg_image[head_part]
+            torso_alpha = 255 * np.ones((gt_image.shape[0], gt_image.shape[1], 1), dtype=np.uint8) # alpha
+
+            # torso part "vertical" in-painting...
+            L = 8 + 1
+            torso_coords = np.stack(np.nonzero(torso_part), axis=-1) # [M, 2]
+            # lexsort: sort 2D coords first by y then by x,
+            # ref: https://stackoverflow.com/questions/2706605/sorting-a-2d-numpy-array-by-multiple-axes
+            inds = np.lexsort((torso_coords[:, 0], torso_coords[:, 1]))
+            torso_coords = torso_coords[inds]
+            # choose the top pixel for each column
+            u, uid, ucnt = np.unique(torso_coords[:, 1], return_index=True, return_counts=True)
+            top_torso_coords = torso_coords[uid] # [m, 2]
+            # only keep top-is-head pixels
+            top_torso_coords_up = top_torso_coords.copy() - np.array([1, 0])
+            mask = head_part[tuple(top_torso_coords_up.T)]
+            if mask.any():
+                top_torso_coords = top_torso_coords[mask]
+                # get the color
+                top_torso_colors = gt_image[tuple(top_torso_coords.T)] # [m, 3]
+                # construct inpaint coords (vertically up, or minus in x)
+                inpaint_torso_coords = top_torso_coords[None].repeat(L, 0) # [L, m, 2]
+                inpaint_offsets = np.stack([-np.arange(L), np.zeros(L, dtype=np.int32)], axis=-1)[:, None] # [L, 1, 2]
+                inpaint_torso_coords += inpaint_offsets
+                inpaint_torso_coords = inpaint_torso_coords.reshape(-1, 2) # [Lm, 2]
+                inpaint_torso_colors = top_torso_colors[None].repeat(L, 0) # [L, m, 3]
+                darken_scaler = 0.98 ** np.arange(L).reshape(L, 1, 1) # [L, 1, 1]
+                inpaint_torso_colors = (inpaint_torso_colors * darken_scaler).reshape(-1, 3) # [Lm, 3]
+                # set color
+                torso_image[tuple(inpaint_torso_coords.T)] = inpaint_torso_colors
+
+                inpaint_torso_mask = np.zeros_like(torso_image[..., 0]).astype(bool)
+                inpaint_torso_mask[tuple(inpaint_torso_coords.T)] = True
+            else:
+                inpaint_torso_mask = None
+
+            push_down = 4
+            L = 48 + push_down + 1
+
+            neck_part = binary_dilation(neck_part, structure=np.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], dtype=bool), iterations=3)
+
+            neck_coords = np.stack(np.nonzero(neck_part), axis=-1) # [M, 2]
+            inds = np.lexsort((neck_coords[:, 0], neck_coords[:, 1]))
+            neck_coords = neck_coords[inds]
+            u, uid, ucnt = np.unique(neck_coords[:, 1], return_index=True, return_counts=True)
+            top_neck_coords = neck_coords[uid] # [m, 2]
+            top_neck_coords_up = top_neck_coords.copy() - np.array([1, 0])
+            mask = head_part[tuple(top_neck_coords_up.T)]
+
+            top_neck_coords = top_neck_coords[mask]
+            offset_down = np.minimum(ucnt[mask] - 1, push_down)
+            top_neck_coords += np.stack([offset_down, np.zeros_like(offset_down)], axis=-1)
             # get the color
-            top_torso_colors = gt_image[tuple(top_torso_coords.T)] # [m, 3]
+            top_neck_colors = gt_image[tuple(top_neck_coords.T)] # [m, 3]
+
             # construct inpaint coords (vertically up, or minus in x)
-            inpaint_torso_coords = top_torso_coords[None].repeat(L, 0) # [L, m, 2]
+            inpaint_neck_coords = top_neck_coords[None].repeat(L, 0) # [L, m, 2]
             inpaint_offsets = np.stack([-np.arange(L), np.zeros(L, dtype=np.int32)], axis=-1)[:, None] # [L, 1, 2]
-            inpaint_torso_coords += inpaint_offsets
-            inpaint_torso_coords = inpaint_torso_coords.reshape(-1, 2) # [Lm, 2]
-            inpaint_torso_colors = top_torso_colors[None].repeat(L, 0) # [L, m, 3]
-            darken_scaler = 0.98 ** np.arange(L).reshape(L, 1, 1) # [L, 1, 1]
-            inpaint_torso_colors = (inpaint_torso_colors * darken_scaler).reshape(-1, 3) # [Lm, 3]
-            # set color
-            torso_image[tuple(inpaint_torso_coords.T)] = inpaint_torso_colors
+            inpaint_neck_coords += inpaint_offsets
+            inpaint_neck_coords = inpaint_neck_coords.reshape(-1, 2) # [Lm, 2]
 
-            inpaint_torso_mask = np.zeros_like(torso_image[..., 0]).astype(bool)
-            inpaint_torso_mask[tuple(inpaint_torso_coords.T)] = True
-        else:
-            inpaint_torso_mask = None
+            #add
+            neck_avg_color = np.mean(gt_image[neck_part], axis=0)
+            inpaint_neck_colors = top_neck_colors[None].repeat(L, 0)  # [L, m, 3]
+            alpha_values = np.linspace(1, 0, L).reshape(L, 1, 1)  # [L, 1, 1]
+            inpaint_neck_colors = inpaint_neck_colors * alpha_values + neck_avg_color * (1 - alpha_values)
+            inpaint_neck_colors = inpaint_neck_colors.reshape(-1, 3)  # [Lm, 3]
+            torso_image[tuple(inpaint_neck_coords.T)] = inpaint_neck_colors
 
-        push_down = 4
-        L = 48 + push_down + 1
+            inpaint_mask = np.zeros_like(torso_image[..., 0]).astype(bool)
+            inpaint_mask[tuple(inpaint_neck_coords.T)] = True
 
-        neck_part = binary_dilation(neck_part, structure=np.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], dtype=bool), iterations=3)
+            blur_img = torso_image.copy()
+            blur_img = cv2.GaussianBlur(blur_img, (5, 5), cv2.BORDER_DEFAULT)
 
-        neck_coords = np.stack(np.nonzero(neck_part), axis=-1) # [M, 2]
-        inds = np.lexsort((neck_coords[:, 0], neck_coords[:, 1]))
-        neck_coords = neck_coords[inds]
-        u, uid, ucnt = np.unique(neck_coords[:, 1], return_index=True, return_counts=True)
-        top_neck_coords = neck_coords[uid] # [m, 2]
-        top_neck_coords_up = top_neck_coords.copy() - np.array([1, 0])
-        mask = head_part[tuple(top_neck_coords_up.T)] 
-        
-        top_neck_coords = top_neck_coords[mask]
-        offset_down = np.minimum(ucnt[mask] - 1, push_down)
-        top_neck_coords += np.stack([offset_down, np.zeros_like(offset_down)], axis=-1)
-        # get the color
-        top_neck_colors = gt_image[tuple(top_neck_coords.T)] # [m, 3]
+            torso_image[inpaint_mask] = blur_img[inpaint_mask]
 
-        # construct inpaint coords (vertically up, or minus in x)
-        inpaint_neck_coords = top_neck_coords[None].repeat(L, 0) # [L, m, 2]
-        inpaint_offsets = np.stack([-np.arange(L), np.zeros(L, dtype=np.int32)], axis=-1)[:, None] # [L, 1, 2]
-        inpaint_neck_coords += inpaint_offsets
-        inpaint_neck_coords = inpaint_neck_coords.reshape(-1, 2) # [Lm, 2]
+            # set mask
+            mask = (neck_part | torso_part | inpaint_mask)
+            if inpaint_torso_mask is not None:
+                mask = mask | inpaint_torso_mask
+            torso_image[~mask] = 0
+            torso_alpha[~mask] = 0
 
-        #add
-        neck_avg_color = np.mean(gt_image[neck_part], axis=0)
-        inpaint_neck_colors = top_neck_colors[None].repeat(L, 0)  # [L, m, 3]
-        alpha_values = np.linspace(1, 0, L).reshape(L, 1, 1)  # [L, 1, 1]
-        inpaint_neck_colors = inpaint_neck_colors * alpha_values + neck_avg_color * (1 - alpha_values)
-        inpaint_neck_colors = inpaint_neck_colors.reshape(-1, 3)  # [Lm, 3]
-        torso_image[tuple(inpaint_neck_coords.T)] = inpaint_neck_colors
+            cv2.imwrite(image_path.replace('ori_imgs', 'torso_imgs').replace('.jpg', '.png'), np.concatenate([torso_image, torso_alpha], axis=-1))
+            progress.advance(task)
 
-        inpaint_mask = np.zeros_like(torso_image[..., 0]).astype(bool)
-        inpaint_mask[tuple(inpaint_neck_coords.T)] = True
-
-        blur_img = torso_image.copy()
-        blur_img = cv2.GaussianBlur(blur_img, (5, 5), cv2.BORDER_DEFAULT)
-
-        torso_image[inpaint_mask] = blur_img[inpaint_mask]
-
-        # set mask
-        mask = (neck_part | torso_part | inpaint_mask)
-        if inpaint_torso_mask is not None:
-            mask = mask | inpaint_torso_mask
-        torso_image[~mask] = 0
-        torso_alpha[~mask] = 0
-
-        cv2.imwrite(image_path.replace('ori_imgs', 'torso_imgs').replace('.jpg', '.png'), np.concatenate([torso_image, torso_alpha], axis=-1))
-    print(f'[INFO] ===== extracted torso and gt images =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted torso and GT images successfully')
 
 
 def face_tracking(ori_imgs_dir):
 
-    print(f'[INFO] ===== perform face tracking =====')
+    console.print(f'[bold blue][INFO][/bold blue] Performing face tracking on [cyan]{ori_imgs_dir}[/cyan]')
 
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
-    
+
     # read one image to get H/W
     tmp_image = cv2.imread(image_paths[0], cv2.IMREAD_UNCHANGED) # [H, W, 3]
     h, w = tmp_image.shape[:2]
@@ -257,11 +304,11 @@ def face_tracking(ori_imgs_dir):
 
     os.system(cmd)
 
-    print(f'[INFO] ===== finished face tracking =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Face tracking completed successfully')
 
 # ref: https://github.com/ShunyuYao/DFA-NeRF
 def extract_flow(base_dir,ori_imgs_dir,mask_dir, flow_dir):
-    print(f'[INFO] ===== extract flow =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting optical flow for [cyan]{base_dir}[/cyan]')
     torch.cuda.empty_cache()
     ref_id = 2
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
@@ -354,13 +401,14 @@ def extract_flow(base_dir,ori_imgs_dir,mask_dir, flow_dir):
     os.system(pose_opt_cmd)
 
 def extract_blendshape(base_dir):
-    print(f'[INFO] ===== extract blendshape =====')
+    console.print(f'[bold blue][INFO][/bold blue] Extracting blendshapes for [cyan]{base_dir}[/cyan]')
     blendshape_cmd = 'python data_utils/blendshape_capture/main.py --path=' + base_dir
     os.system(blendshape_cmd)
+    console.print(f'[bold green][INFO][/bold green] ✓ Extracted blendshapes successfully')
 
 
 def save_transforms(base_dir, ori_imgs_dir):
-    print(f'[INFO] ===== save transforms =====')
+    console.print(f'[bold blue][INFO][/bold blue] Saving transforms to [cyan]{base_dir}[/cyan]')
 
     image_paths = glob.glob(os.path.join(ori_imgs_dir, '*.jpg'))
     
@@ -412,7 +460,7 @@ def save_transforms(base_dir, ori_imgs_dir):
         with open(os.path.join(base_dir, 'transforms_' + save_id + '.json'), 'w') as fp:
             json.dump(transform_dict, fp, indent=2, separators=(',', ': '))
 
-    print(f'[INFO] ===== finished saving transforms =====')
+    console.print(f'[bold green][INFO][/bold green] ✓ Saved transforms successfully')
 
 
 if __name__ == '__main__':
@@ -420,6 +468,7 @@ if __name__ == '__main__':
     parser.add_argument('path', type=str, help="path to video file")
     parser.add_argument('--task', type=int, default=-1, help="-1 means all")
     parser.add_argument('--asr', type=str, default='ave', help="ave, hubert or deepspeech")
+    parser.add_argument('--segformer', action='store_true', help="use Segformer model instead of BiSeNet for face parsing")
 
 
     opt = parser.parse_args()
@@ -454,7 +503,7 @@ if __name__ == '__main__':
 
     # face parsing
     if opt.task == -1 or opt.task == 3:
-        extract_semantics(ori_imgs_dir, parsing_dir)
+        extract_semantics(ori_imgs_dir, parsing_dir, use_segformer=opt.segformer)
 
     # extract bg
     if opt.task == -1 or opt.task == 4:

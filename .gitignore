@@ -11,3 +11,4 @@ __pycache__/
 *.obj
 model/*
 data/*
+/yt-dlp_linux

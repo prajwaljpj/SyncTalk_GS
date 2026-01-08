@@ -1,0 +1,13 @@
+/*.zip
+/*.mp4
+__pycache__/
+*.npy
+*.pth
+*.jpg
+*.png
+*.egg-info/
+*build/
+*.mat
+*.obj
+model/*
+data/*

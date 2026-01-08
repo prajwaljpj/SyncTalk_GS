@@ -1,0 +1,109 @@
+# SyncTalk Streaming Inference Configuration
+# This file contains all the opt parameters needed for model initialization
+
+# ============================================================================
+# Model Architecture
+# ============================================================================
+model:
+  asr_model: ave              # Audio encoder: ave, deepspeech, hubert
+  emb: false                  # Use audio class + embedding instead of logits
+  att: 2                      # Audio attention mode (0=off, 1=left, 2=bi-directional)
+
+  # Model dimensions
+  exp_eye: true               # Explicitly control the eyes
+  ind_dim: 4                  # Individual code dimension
+  ind_num: 20000              # Number of individual codes
+  ind_dim_torso: 8            # Individual code dim for torso
+  amb_dim: 2                  # Ambient dimension
+
+# ============================================================================
+# Scene Settings
+# ============================================================================
+scene:
+  bound: 1.0                  # Scene bounding box half length
+  scale: 4.0                  # Camera radius scale
+  offset: [0, 0, 0]           # Camera offset
+  torso_shrink: 0.8           # Shrink bg coords for torso deformation
+  color_space: srgb           # Color space: linear or srgb
+
+# ============================================================================
+# Rendering Settings
+# ============================================================================
+rendering:
+  dt_gamma: 0.00390625        # 1/256 - adaptive ray marching
+  min_near: 0.05              # Minimum near distance for camera
+  density_thresh: 10          # Density threshold (sigma)
+  density_thresh_torso: 0.01  # Density threshold for torso (alpha)
+  max_steps: 16               # Max steps sampled per ray
+  num_steps: 16               # Num steps sampled per ray
+  upsample_steps: 0           # Up-sample steps per ray
+  max_ray_batch: 4096         # Batch size of rays at inference
+
+# ============================================================================
+# Performance Settings
+# ============================================================================
+performance:
+  fp16: true                  # Use mixed precision (faster)
+  cuda_ray: true              # Use CUDA raymarching (required)
+  patch_size: 1               # Render patch size (1=disabled)
+  preload: 0                  # 0=disk, 1=cpu, 2=gpu
+  update_extra_interval: 16   # Interval to update extra status
+
+# ============================================================================
+# Eye/Face Settings
+# ============================================================================
+face:
+  au45: false                 # Use OpenFace AU45
+  fix_eye: -1                 # Fixed eye area (-1=natural movement, 0-0.3=fixed)
+  smooth_eye: false           # Smooth eye area sequence
+  smooth_lips: false          # Smooth lip movements
+  bs_area: upper              # Blendshape area: upper or eye
+
+# ============================================================================
+# Background Settings
+# ============================================================================
+background:
+  bg_img: ""                  # Background image path (empty=use default)
+  fbg: false                  # Frame-wise background
+
+# ============================================================================
+# Training Settings (not used in inference but required by model)
+# ============================================================================
+training:
+  train_camera: false
+  finetune_lips: false
+  init_lips: false
+  warmup_step: 10000
+  amb_aud_loss: 1
+  amb_eye_loss: 1
+  unc_loss: 1
+  lambda_amb: 0.0001
+  pyramid_loss: 0
+
+# ============================================================================
+# Data Settings
+# ============================================================================
+data:
+  data_range: [0, -1]         # Data range to use
+  part: false                 # Use partial training data (1/10)
+  part2: false                # Use partial training data (first 15s)
+
+# ============================================================================
+# Camera/Path Settings
+# ============================================================================
+camera:
+  smooth_path: false          # Smooth camera pose trajectory
+  smooth_path_window: 7       # Smoothing window size
+  radius: 3.35                # Default camera radius from center
+  fovy: 21.24                 # Default camera field of view
+
+# ============================================================================
+# Mode Settings (set at runtime, but defaults here)
+# ============================================================================
+mode:
+  test: true                  # Test/inference mode
+  test_train: false           # Test on training dataset
+  gui: false                  # Start GUI (not used for streaming)
+  portrait: false             # Portrait mode (composite face only)
+  torso: false                # Torso mode
+  asr: false                  # Real-time ASR mode (false=use pre-calculated features)

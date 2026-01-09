@@ -22,6 +22,14 @@ from nerf_triplane.network import NeRFNetwork, AudioEncoder
 from nerf_triplane.utils import Trainer, get_audio_features, get_rays, get_bg_coords
 from nerf_triplane.provider import nerf_matrix_to_ngp
 
+# Rich for beautiful terminal output
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.panel import Panel
+from rich import print as rprint
+
+console = Console()
+
 
 class StreamingInference:
     def __init__(
@@ -85,7 +93,7 @@ class StreamingInference:
 
     def _load_model(self):
         """Load NeRF model and checkpoint via Trainer."""
-        print("Loading model...")
+        console.print("[cyan]Loading model...[/cyan]")
 
         # Create opt configuration using load_config module
         self.opt = load_inference_config(
@@ -101,33 +109,35 @@ class StreamingInference:
         )
 
         # Create model
-        self.model = NeRFNetwork(self.opt)
+        with console.status("[yellow]Creating model...", spinner="dots"):
+            self.model = NeRFNetwork(self.opt)
 
         # Create trainer - automatically loads checkpoint
-        criterion = torch.nn.L1Loss(reduction="none")
-        self.trainer = Trainer(
-            "ngp",
-            self.opt,
-            self.model,
-            device=self.device,
-            workspace=self.workspace,
-            criterion=criterion,
-            fp16=self.opt.fp16,
-            metrics=[],
-            use_checkpoint=self.opt.ckpt,
-        )
+        with console.status(f"[yellow]Loading checkpoint: {self.opt.ckpt}...", spinner="dots"):
+            criterion = torch.nn.L1Loss(reduction="none")
+            self.trainer = Trainer(
+                "ngp",
+                self.opt,
+                self.model,
+                device=self.device,
+                workspace=self.workspace,
+                criterion=criterion,
+                fp16=self.opt.fp16,
+                metrics=[],
+                use_checkpoint=self.opt.ckpt,
+            )
 
-        print(f"✓ Model loaded from {self.workspace}")
+        console.print(f"[green]✓[/green] Model loaded from [cyan]{self.workspace}[/cyan]")
 
         # DEBUG: Check if density grids are loaded
-        print(f"  Density grid loaded: {hasattr(self.model, 'mean_density')}")
+        if hasattr(self.model, 'mean_density'):
+            console.print(f"[dim]  Density grid loaded[/dim]")
 
-        if self.debug:
-            if hasattr(self.model, "mean_density"):
-                print(f"  Mean density shape: {self.model.mean_density}")
+        if self.debug and hasattr(self.model, "mean_density"):
+            console.print(f"[dim]  Mean density: {self.model.mean_density}[/dim]")
 
         self.model.eval()
-        print("✓ Model set to eval mode")
+        console.print("[green]✓[/green] Model set to eval mode")
 
     def _load_scene_data(self):
         """
@@ -140,7 +150,7 @@ class StreamingInference:
             provider.py lines 387-403 (background loading)
             provider.py lines 492-509 (intrinsics loading)
         """
-        print("Loading scene data...")
+        console.print("[cyan]Loading scene data...[/cyan]")
 
         # 1. Load transforms.json
         # TODO: Implement this
@@ -195,14 +205,14 @@ class StreamingInference:
         self.num_poses = len(poses)
         self.img_ids = img_ids
 
-        print(f"  Loaded {self.num_poses} camera poses")
+        console.print(f"[green]✓[/green] Loaded {self.num_poses} camera poses")
 
         # 4. Load background image
         # TODO: Implement this
         bg_path = os.path.join(self.data_path, "bc.jpg")
 
         if not os.path.exists(bg_path):
-            print(f"  [WARN] Background image not found, using white background")
+            console.print(f"[yellow]⚠[/yellow] Background image not found, using white background")
             bg_img = np.ones((self.H, self.W, 3), dtype=np.float32)
         else:
             bg_img = cv2.imread(bg_path, cv2.IMREAD_UNCHANGED)
@@ -220,7 +230,7 @@ class StreamingInference:
         bs_path = os.path.join(self.data_path, "bs.npy")
 
         if not os.path.exists(bs_path):
-            print(f"  [WARN] Blendshape file not found, using zeros")
+            console.print(f"[yellow]⚠[/yellow] Blendshape file not found, using zeros")
             self.eye_areas = torch.zeros(self.num_poses, 7, dtype=torch.float32).to(
                 self.device
             )
@@ -247,9 +257,9 @@ class StreamingInference:
                 self.device
             )
 
-            print(f"  Loaded blendshapes: {self.eye_areas.shape}")
-            print(
-                f"  Poses: {self.poses.shape[0]}, Eye areas: {self.eye_areas.shape[0]}"
+            console.print(f"[green]✓[/green] Loaded blendshapes: {self.eye_areas.shape}")
+            console.print(
+                f"[dim]  Poses: {self.poses.shape[0]}, Eye areas: {self.eye_areas.shape[0]}[/dim]"
             )
             assert (
                 self.poses.shape[0] == self.eye_areas.shape[0]
@@ -264,20 +274,18 @@ class StreamingInference:
             self.parsing_dir = os.path.join(self.data_path, "parsing")
 
             if not os.path.exists(self.ori_imgs_dir):
-                print(f"  [WARN] Portrait mode enabled but ori_imgs not found")
+                console.print(f"[yellow]⚠[/yellow] Portrait mode enabled but ori_imgs not found")
                 self.portrait = False
             elif not os.path.exists(self.parsing_dir):
-                print(f"  [WARN] Portrait mode enabled but parsing not found")
+                console.print(f"[yellow]⚠[/yellow] Portrait mode enabled but parsing not found")
                 self.portrait = False
             else:
-                print(f"  Portrait mode enabled")
-
-                print(f"✓ Scene data loaded")
+                console.print(f"[green]✓[/green] Portrait mode enabled")
 
         # Pre-compute background coordinates (static, doesn't change per frame)
         self.bg_coords = get_bg_coords(self.H, self.W, self.device)  # [1, H*W, 2]
 
-        print(f"✓ Scene data loaded")
+        console.print(f"[green]✓[/green] Scene data loaded")
 
     def _load_audio_encoder(self):
         """
@@ -293,13 +301,13 @@ class StreamingInference:
         """
         # Only load AVE if using ave model
         if self.opt.asr_model != "ave":
-            print(
-                f"  ASR model: {self.opt.asr_model} (requires pre-computed .npy features)"
+            console.print(
+                f"[yellow]ℹ[/yellow] ASR model: {self.opt.asr_model} (requires pre-computed .npy features)"
             )
             self.audio_encoder = None
             return
 
-        print("Loading AVE audio encoder...")
+        console.print("[cyan]Loading AVE audio encoder...[/cyan]")
 
         # 1. Create AudioEncoder model
         # TODO: Implement this
@@ -329,19 +337,187 @@ class StreamingInference:
             param.requires_grad = False
 
         # 4. Warmup (optional but recommended for consistent performance)
-        # TODO: Implement this
         # Warmup: Run a few dummy forward passes for consistent timing
         # Input shape: [batch, 1, 80, 16] - mel spectrogram
-        print("  Warming up encoder...")
-        dummy_input = torch.randn(1, 1, 80, 16).to(self.device)
+        with console.status("[yellow]Warming up encoder...", spinner="dots"):
+            dummy_input = torch.randn(1, 1, 80, 16).to(self.device)
+            with torch.no_grad():
+                for _ in range(3):
+                    _ = self.audio_encoder(dummy_input)
 
-        with torch.no_grad():
-            for _ in range(3):
-                _ = self.audio_encoder(dummy_input)
+        console.print(f"[green]✓[/green] AVE encoder ready (output dim: 512)")
 
-        print(f"  AVE encoder ready (output dim: 512)")
+    def reset_streaming_buffers(self):
+        """
+        Reset streaming buffers for a new audio stream.
+        Call this before starting a new streaming session.
+        """
+        self.audio_buffer = np.array([], dtype=np.float32)  # Raw audio samples
+        self.mel_buffer = []  # Mel-spectrogram frames
+        self.feature_buffer = []  # AVE features (512-dim)
+        self.frame_counter = 0  # Track output frame count
 
-        print("✓ AVE audio encoder loaded")
+        console.print("[green]✓[/green] Streaming buffers reset")
+
+    def process_audio_chunk(self, audio_chunk):
+        """
+        Process an audio chunk and generate frames when possible.
+
+        Args:
+            audio_chunk: numpy array of audio samples (16kHz, mono)
+                        Recommended size: 640-2560 samples (40-160ms)
+
+        Returns:
+            List of generated frames (empty if not enough context yet)
+            Each frame is [H, W, 3] numpy array (uint8)
+
+        Usage:
+            inference = StreamingInference(...)
+            inference.reset_streaming_buffers()
+
+            for chunk in audio_stream:
+                frames = inference.process_audio_chunk(chunk)
+                for frame in frames:
+                    display(frame)
+        """
+        if not hasattr(self, 'audio_buffer'):
+            self.reset_streaming_buffers()
+
+        # 1. Add chunk to audio buffer
+        self.audio_buffer = np.concatenate([self.audio_buffer, audio_chunk])
+
+        # 2. Convert audio to mel-spectrogram (incremental)
+        new_mel_frames = self._audio_to_mel_incremental()
+
+        # 3. Extract AVE features for new mel frames
+        new_features = self._extract_features_incremental(new_mel_frames)
+
+        # 4. Generate frames when we have enough context
+        frames = self._generate_frames_with_context()
+
+        return frames
+
+    def _audio_to_mel_incremental(self):
+        """
+        Convert buffered audio to mel-spectrogram frames incrementally.
+
+        Returns:
+            List of new mel frames (each is [80] array)
+        """
+        # Minimum audio needed: 16 mel frames + some buffer
+        # Each mel frame = 200 samples (hop_length), first frame needs 800 samples
+        min_samples_needed = 800 + 200 * len(self.mel_buffer)
+
+        if len(self.audio_buffer) < min_samples_needed:
+            return []
+
+        # Apply pre-emphasis to entire buffer
+        wav_preemph = self._preemphasis(self.audio_buffer, k=0.97)
+
+        # Compute STFT
+        D = self._stft(wav_preemph)
+
+        # Convert to mel
+        mel_basis = self._build_mel_basis()
+        S = np.dot(mel_basis, np.abs(D))
+
+        # Convert to dB and normalize
+        S = self._amp_to_db(S) - 20
+        S = self._normalize(S)
+
+        # Transpose to [T, 80]
+        mel = S.T
+
+        # Extract only new frames (skip already processed ones)
+        new_frames = []
+        for i in range(len(self.mel_buffer), mel.shape[0]):
+            if i < mel.shape[0]:
+                new_frames.append(mel[i])
+                self.mel_buffer.append(mel[i])
+
+        return new_frames
+
+    def _extract_features_incremental(self, new_mel_frames):
+        """
+        Extract AVE features for new mel frames.
+
+        Args:
+            new_mel_frames: List of new mel frames to process
+
+        Returns:
+            Number of new features extracted
+        """
+        if len(new_mel_frames) == 0:
+            return 0
+
+        if self.audio_encoder is None:
+            raise RuntimeError("AVE encoder required for streaming")
+
+        # For each potential output frame, check if we can extract features
+        features_before = len(self.feature_buffer)
+
+        while True:
+            # Calculate which video frame we're trying to extract
+            target_frame_idx = len(self.feature_buffer)
+
+            # Calculate required mel frame range
+            # Formula: start_idx = int(80.0 * (frame_idx / 25.0))
+            start_idx = int(80.0 * (target_frame_idx / float(self.fps)))
+            end_idx = start_idx + 16
+
+            # Check if we have enough mel frames
+            if end_idx > len(self.mel_buffer):
+                break
+
+            # Extract features for this frame
+            mel_window = np.stack(self.mel_buffer[start_idx:end_idx], axis=0)  # [16, 80]
+
+            # Convert to tensor [1, 1, 80, 16]
+            mel_tensor = torch.FloatTensor(mel_window.T).unsqueeze(0).unsqueeze(0)
+            mel_tensor = mel_tensor.to(self.device)
+
+            # Extract features
+            with torch.no_grad():
+                feat = self.audio_encoder(mel_tensor)  # [1, 512]
+
+            # Store in buffer with correct format [1, 1, 512]
+            feat = feat.unsqueeze(0).permute(1, 0, 2)  # [1, 1, 512]
+            self.feature_buffer.append(feat)
+
+        return len(self.feature_buffer) - features_before
+
+    def _generate_frames_with_context(self):
+        """
+        Generate video frames when we have enough audio context.
+
+        For bi-directional attention (mode 2):
+        - Need 4 past frames + current + 3 future frames
+        - Can start generating at frame_counter when we have frame_counter+3 in buffer
+
+        Returns:
+            List of generated frames
+        """
+        frames = []
+
+        # Concatenate all buffered features
+        if len(self.feature_buffer) < 8:  # Need at least 8 frames for first output
+            return frames
+
+        # Stack features into tensor [N, 1, 512]
+        all_features = torch.cat(self.feature_buffer, dim=0)  # [N, 1, 512]
+
+        # Generate frames until we run out of context
+        while self.frame_counter + 3 < len(self.feature_buffer):
+            # Generate frame at self.frame_counter
+            frame = self.generate_frame(
+                all_features,
+                self.frame_counter,
+                debug=False
+            )
+            frames.append(frame)
+            self.frame_counter += 1
+
+        return frames
 
     def mirror_index(self, index):
         """
@@ -546,7 +722,7 @@ class StreamingInference:
         Reference: utils.py line 1580-1581
         """
         wav, sr = librosa.load(audio_path, sr=16000)
-        print(f"Loaded audio: {len(wav)/sr:.2f}s @ {sr}Hz")
+        console.print(f"[green]✓[/green] Loaded audio: {len(wav)/sr:.2f}s @ {sr}Hz")
         return wav
 
     @torch.inference_mode()
@@ -595,27 +771,28 @@ class StreamingInference:
         else:
             eye = None
 
-        # 6. Prepare background color (provider.py:596-604)
-        # For inference (not torso mode): use background image
-        bg_color = self.bg_img.view(1, -1, 3)  # [1, H*W, 3]
-
         # 6. Prepare background color (provider.py:587-604)
-        # Load torso image and composite over background
-        # torso_path = os.path.join(self.data_path, "torso_imgs", f"{img_id}.png")
-        # torso_img = cv2.imread(torso_path, cv2.IMREAD_UNCHANGED)  # [H, W, 4]
-        # torso_img = cv2.cvtColor(torso_img, cv2.COLOR_BGRA2RGBA)
-        # torso_img = torso_img.astype(np.float32) / 255.0  # [H, W, 4]
-        # torso_img = torch.from_numpy(torso_img).unsqueeze(0).to(self.device)  # [1, H, W, 4]
+        # Load torso image and composite over background (CRITICAL for avoiding chin artifacts!)
+        torso_path = os.path.join(self.data_path, "torso_imgs", f"{img_id}.png")
 
-        # # Composite: torso RGB * alpha + bg * (1 - alpha)
-        # bg_torso_img = torso_img[..., :3] * torso_img[..., 3:] + self.bg_img.unsqueeze(0) * (1 - torso_img[..., 3:])
-        # bg_torso_img = bg_torso_img.view(1, -1, 3)  # [1, H*W, 3]
+        if os.path.exists(torso_path):
+            torso_img = cv2.imread(torso_path, cv2.IMREAD_UNCHANGED)  # [H, W, 4]
+            torso_img = cv2.cvtColor(torso_img, cv2.COLOR_BGRA2RGBA)
+            torso_img = torso_img.astype(np.float32) / 255.0  # [H, W, 4]
+            torso_img = torch.from_numpy(torso_img).unsqueeze(0).to(self.device)  # [1, H, W, 4]
 
-        # # For non-torso mode, use composited torso as bg
-        # if not self.opt.torso:
-        #     bg_color = bg_torso_img
-        # else:
-        #     bg_color = self.bg_img.view(1, -1, 3)  # [1, H*W, 3]
+            # Composite: torso RGB * alpha + bg * (1 - alpha)
+            bg_torso_img = torso_img[..., :3] * torso_img[..., 3:] + self.bg_img.unsqueeze(0) * (1 - torso_img[..., 3:])
+            bg_torso_img = bg_torso_img.view(1, -1, 3)  # [1, H*W, 3]
+
+            # For non-torso mode, use composited torso as bg
+            if not self.opt.torso:
+                bg_color = bg_torso_img
+            else:
+                bg_color = self.bg_img.view(1, -1, 3)  # [1, H*W, 3]
+        else:
+            console.print(f"[yellow]⚠[/yellow] Torso image not found: {torso_path}, using plain background")
+            bg_color = self.bg_img.view(1, -1, 3)  # [1, H*W, 3]
 
         # 7. Build data dictionary (provider.py:530-604)
         # # 7. Load ground truth image (provider.py:629-640)
@@ -722,10 +899,142 @@ class StreamingInference:
         return pred
 
 
-if __name__ == "__main__":
+def demo_streaming_inference():
+    """
+    Demonstration of streaming audio chunk processing.
+
+    This example shows how to:
+    1. Initialize the streaming inference
+    2. Process audio in chunks
+    3. Get frames in real-time
+    """
+    import time
+    from rich.table import Table
+    from rich import box
+
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]SyncTalk Streaming Demo[/bold cyan]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    # 1. Initialize
     inference = StreamingInference(
-        data_path="data/May", workspace="model/trial_may", portrait=True, torso=False
+        data_path="data/May",
+        workspace="model/trial_may",
+        portrait=True,
+        torso=False
     )
+
+    # 2. Reset buffers for new stream
+    inference.reset_streaming_buffers()
+
+    # 3. Load test audio and simulate streaming
+    test_audio_path = "data/May/aud.wav"
+    wav = inference.load_audio_file(test_audio_path)
+
+    # Chunk size: 1280 samples = 80ms at 16kHz (generates ~2 frames per chunk)
+    chunk_size = 1280
+    total_chunks = len(wav) // chunk_size
+
+    info = Table(show_header=False, box=box.SIMPLE)
+    info.add_column("Parameter", style="cyan")
+    info.add_column("Value", style="white")
+    info.add_row("Audio length", f"{len(wav)/16000:.2f}s")
+    info.add_row("Chunk size", f"{chunk_size} samples ({chunk_size/16000*1000:.1f}ms)")
+    info.add_row("Total chunks", str(total_chunks))
+    info.add_row("Expected latency", "~320ms (bi-directional attention)")
+    console.print(info)
+
+    # 4. Process chunks and collect frames
+    all_frames = []
+    chunk_times = []
+
+    console.print()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[cyan]{task.fields[frames]} frames"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[cyan]Processing chunks...", total=total_chunks, frames=0)
+
+        for i in range(total_chunks):
+            chunk_start = i * chunk_size
+            chunk_end = min(chunk_start + chunk_size, len(wav))
+            audio_chunk = wav[chunk_start:chunk_end]
+
+            # Process chunk
+            start_time = time.time()
+            frames = inference.process_audio_chunk(audio_chunk)
+            elapsed = time.time() - start_time
+            chunk_times.append(elapsed)
+
+            # Collect generated frames
+            all_frames.extend(frames)
+
+            # Update progress
+            progress.update(task, advance=1, frames=len(all_frames))
+
+    # 5. Summary
+    console.print()
+    console.print(Panel.fit(
+        "[bold yellow]Streaming Summary[/bold yellow]",
+        border_style="yellow"
+    ))
+
+    summary = Table(show_header=False, box=box.SIMPLE)
+    summary.add_column("Metric", style="cyan")
+    summary.add_column("Value", style="green")
+    summary.add_row("Total frames generated", str(len(all_frames)))
+    summary.add_row("Average processing time", f"{np.mean(chunk_times)*1000:.1f}ms per chunk")
+    summary.add_row("Max processing time", f"{np.max(chunk_times)*1000:.1f}ms per chunk")
+    rtf = chunk_size/16000 / np.mean(chunk_times)
+    summary.add_row("Real-time factor", f"{rtf:.2f}x {'✓' if rtf >= 1.0 else '✗'}")
+    console.print(summary)
+
+    # 6. Save output video
+    output_path = "streaming_output.mp4"
+
+    console.print()
+    console.print(f"[cyan]Saving output video:[/cyan] {output_path}")
+
+    import imageio
+    with console.status("[yellow]Writing video...", spinner="dots"):
+        writer = imageio.get_writer(output_path, fps=25, codec='libx264')
+        for frame in all_frames:
+            # frame is already RGB, imageio expects RGB
+            writer.append_data(frame)
+        writer.close()
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]✓ Video saved successfully![/bold green]\n\n"
+        f"[cyan]File:[/cyan] {output_path}\n"
+        f"[cyan]Duration:[/cyan] {len(all_frames)/25:.2f}s\n"
+        f"[cyan]Resolution:[/cyan] {all_frames[0].shape[1]}x{all_frames[0].shape[0]}",
+        title="Success",
+        border_style="green"
+    ))
+
+    return all_frames
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--stream":
+        # Run streaming demo
+        demo_streaming_inference()
+    else:
+        # Run original test code
+        inference = StreamingInference(
+            data_path="data/May", workspace="model/trial_may", portrait=True, torso=False
+        )
 
     # Test if mirror index function is working properly
     print("\n=== Testing mirror_index ===")

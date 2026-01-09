@@ -75,6 +75,22 @@ If you encounter problems installing PyTorch3D, you can use the following comman
 python ./scripts/install_pytorch3d.py
 ```
 
+#### Install dependency (EASY SETUP)
+
+To make the project compatible with cuda 12.8 we have a uv setup. Install [UV](https://docs.astral.sh/uv/getting-started/installation/) and run `uv sync`
+
+``` bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# wget -qO- https://astral.sh/uv/install.sh | sh
+```
+
+Install dependencies
+
+``` bash
+uv sync
+```
+
+
 ### Data Preparation
 #### Pre-trained model
 Please place the [May.zip](https://drive.google.com/file/d/18Q2H612CAReFxBd9kxr-i1dD8U1AUfsV/view?usp=sharing) in the **data** folder, the [trial_may.zip](https://drive.google.com/file/d/1C2639qi9jvhRygYHwPZDGs8pun3po3W7/view?usp=sharing) in the **model** folder, and then unzip them.
@@ -211,7 +227,27 @@ python main.py data/May --workspace model/trial_may_torso -O  --torso --test --t
 
 ```
 
+## LiveKit Integration
 
+This repository includes a **real-time conversational avatar integration** using LiveKit and SyncTalk. The integration enables:
+
+- ✅ Real-time lip-synced video generation (~415-500ms latency)
+- ✅ Gemini-powered conversation (STT/LLM/TTS)
+- ✅ WebRTC-based streaming to browsers
+- ✅ Photorealistic facial expressions
+
+**Quick Start:**
+```bash
+# See the livekit directory
+cd livekit/
+
+# Follow instructions in README.md
+./livekit_server.sh
+```
+
+**Documentation:**
+- [LiveKit Setup Guide](livekit/docs/LIVEKIT_SETUP_COMPLETE.md)
+- [Integration Details](livekit/docs/LIVEKIT_INTEGRATION_GUIDE.md)
 
 ## Citation	
 
